@@ -116,12 +116,14 @@ def make_lv(name=None, tags=()):
 
 
 @contextmanager
-def change_vol_tag(vol, tag_prefix, tag_value):
+def change_vol_tag(vol, tag_prefix, tag_value, delete=False):
     lv = lvm.getLV(vol.sdUUID, vol.volUUID)
     new_tags = {tag_prefix + tag_value}
     old_tags = {tag for tag in lv.tags
                 if tag.startswith(tag_prefix)}
 
+    if delete:
+        new_tags = ""
     lvm.changeLVsTags(
         vol.sdUUID, vol.volUUID, delTags=old_tags, addTags=new_tags)
     try:
@@ -1290,6 +1292,20 @@ def test_dump_sd_metadata(
             }
         }
     }
+
+    # Omit entries from dump output that can not be found due to invalid
+    # metadata block and neither can be looked up in MD slot lv tags
+    with change_vol_tag(vol, sc.TAG_PREFIX_IMAGE, "deleted-tag", delete=True):
+        assert dom.dump() == {
+            "metadata": expected_metadata,
+            "volumes": {
+                vol_uuid: {
+                    "status": sc.VOL_STATUS_INVALID,
+                    "parent": sc.BLANK_UUID,
+                    "mdslot": mdslot,
+                }
+            }
+        }
 
 
 LVM_TAG_CHARS = string.ascii_letters + "0123456789_+.-/=!:#"

@@ -1721,10 +1721,11 @@ class BlockStorageDomain(sd.StorageDomain):
 
     def _dump_volumes(self):
         vols_md = {}
+        vol_md = {"status": ""}
         slots_md = self._parse_volumes_metadata()
 
         for lv in _iter_volumes(self.sdUUID):
-            # Complement volume metadata from parsed slots by slot number.
+
             try:
                 lvtags = parse_lv_tags(lv)
                 vol_md = slots_md[lvtags.mdslot]
@@ -1732,12 +1733,13 @@ class BlockStorageDomain(sd.StorageDomain):
                 self.log.warning(
                     "Failed to get metadata from lv tags for lv %s/%s: %s",
                     self.sdUUID, lv.name, e)
-                vol_md = {"status": sc.VOL_STATUS_INVALID}
+                vol_md["status"] = sc.VOL_STATUS_INVALID
 
-            # Complement metadata from tags in case it was missing from slots.
             if vol_md["status"] != sc.VOL_STATUS_OK:
-                vol_md["image"] = lvtags.image
-                vol_md["parent"] = lvtags.parent
+                # Try to lookup missing keys in lvtags, omit key if not found
+                for key in ["image", "parent"]:
+                    if key not in vol_md and getattr(lvtags, key):
+                        vol_md[key] = getattr(lvtags, key)
 
             # Add the volume sizes information.
             try:
@@ -1749,13 +1751,12 @@ class BlockStorageDomain(sd.StorageDomain):
                     "Failed to get size for lv %s/%s: %s",
                     self.sdUUID, lv.name, e)
                 vol_md["status"] = sc.VOL_STATUS_INVALID
+            vols_md[lv.name] = vol_md
 
             # Check if volume was marked as removed and override status.
             img = lvtags.image
             if img is not None and img.startswith(sc.REMOVED_IMAGE_PREFIX):
                 vol_md["status"] = sc.VOL_STATUS_REMOVED
-
-            vols_md[lv.name] = vol_md
 
         return vols_md
 
