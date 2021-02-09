@@ -76,7 +76,12 @@ def add_ticket(ticket):
 
 @requires_image_daemon
 def get_ticket(ticket_id):
-    return _request("GET", ticket_id)
+    response, content = _request("GET", ticket_id)
+    try:
+        return json.loads(content)
+    except ValueError as e:
+        error_info = {"explanation": "Invalid JSON", "detail": str(e)}
+        raise se.ImageDaemonError(response.status, response.reason, error_info)
 
 
 @requires_image_daemon
@@ -88,6 +93,36 @@ def extend_ticket(uuid, timeout):
 @requires_image_daemon
 def remove_ticket(uuid):
     _request("DELETE", uuid)
+
+
+def _parse_text_plain_charset(response, default_encoding='utf8'):
+    content_type = response.getheader("content-type")
+    if not content_type:
+        return default_encoding
+
+    try:
+        # Assuming there is only one ";" delimiter in content-type response.
+        # RFC spec does not explicitly mention possibility of more parameters.
+        # Related section: https://tools.ietf.org/html/rfc2616#section-3.6
+        response_type, charset = content_type.split(";", 1)
+    except ValueError:
+        log.warning("Unable to determine encoding due to missing parameters "
+                    "in content-type response header. Defaulting to: {}. "
+                    "Response headers: {}"
+                    .format(default_encoding, response.headers))
+        return default_encoding
+
+    # Assuming charset is always defined as "charset=token" and there is always
+    # only one parameter as the RFC spec does not define any other parameters.
+    # Related section: https://tools.ietf.org/html/rfc2616#section-3.4
+    parameter, encoding = charset.split("=", 1)
+    if "charset" != parameter.strip():
+        log.warning("charset parameter not found in content-type response "
+                    "header. Defaulting to: {}. Response headers: {}"
+                    .format(default_encoding, response.headers))
+        return default_encoding
+
+    return encoding
 
 
 def _request(method, uuid, body=None):
@@ -107,8 +142,13 @@ def _request(method, uuid, body=None):
 
         content = _read_content(res)
         if res.status >= 300:
-            raise se.ImageDaemonError(res.status, res.reason, content)
-        return content
+            encoding = _parse_text_plain_charset(res)
+            try:
+                error = content.decode(encoding)
+            except (UnicodeDecodeError, LookupError):
+                error = repr(content)
+            raise se.ImageDaemonError(res.status, res.reason, error)
+        return res, content
 
 
 def _read_content(response):
@@ -116,20 +156,11 @@ def _read_content(response):
     # connections. HTTPResponse.read() is doing the right thing, handling
     # request content length or chunked encoding.
     try:
-        res_data = response.read()
+        # This can also be a "200 OK" with "Content-Length: 0",
+        # or "204 No Content" without Content-Length header.
+        # See https://tools.ietf.org/html/rfc7230#section-3.3.2
+        return response.read()
     except EnvironmentError as e:
         error_info = {"explanation": "Error reading response",
                       "detail": str(e)}
-        raise se.ImageDaemonError(response.status, response.reason, error_info)
-
-    # This can be a "200 OK" with "Content-Length: 0", or "204 No Content"
-    # without Content-Length header.
-    # See https://tools.ietf.org/html/rfc7230#section-3.3.2
-    if not res_data:
-        return {}
-
-    try:
-        return json.loads(res_data.decode("utf8"))
-    except ValueError as e:
-        error_info = {"explanation": "Invalid JSON", "detail": str(e)}
         raise se.ImageDaemonError(response.status, response.reason, error_info)
