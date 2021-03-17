@@ -1156,3 +1156,39 @@ class InterruptibleDirectFile(object):
             # Do not spam the log with received binary data
             raise cmdutils.Error(args, rc, "[suppressed]", err)
         return out
+
+
+class MemoryBackend(object):
+    """
+    For testing purposes only.
+    """
+    def __init__(self):
+        self._file = io.BytesIO()
+
+    def name(self):
+        return self.__class__
+
+    def pread(self, offset, buf):
+        self._file.seek(offset, os.SEEK_SET)
+        pos = 0
+
+        while pos < len(buf):
+            rbuf = memoryview(buf)[pos:]
+            nread = uninterruptible(self._file.readinto, rbuf)
+            if nread == 0:
+                break
+            pos += nread
+        return pos
+
+    def pwrite(self, offset, buf):
+        self._file.seek(offset, os.SEEK_SET)
+        pos = 0
+        while pos < len(buf):
+            wbuf = memoryview(buf)[pos:]
+            pos += uninterruptible(self._file.write, wbuf)
+
+    def size(self):
+        return len(self._file.getbuffer())
+
+    def close(self):
+        self._file.close()

@@ -121,6 +121,20 @@ class TemporaryVolume(object):
         self.backend.close()
 
 
+class MemoryVolume(TemporaryVolume):
+
+    def __init__(self, alignment=None, block_size=None):
+        self.lockspace = make_uuid()
+        # TODO: use pytest fixture params for alignment and blocksize
+        self.alignment = alignment if alignment else 1048576  # 1MiB
+        self.block_size = block_size if block_size else 512
+        self.backend = xlease.MemoryBackend()
+        self.format_index()
+
+    def zero_storage(self):
+        raise NotImplemented
+
+
 @pytest.fixture(params=[
     pytest.param(
         (userstorage.PATHS["file-512"], sc.ALIGNMENT_1M),
@@ -149,8 +163,22 @@ def tmp_vol(request):
 
 
 @pytest.fixture
+def memory_vol():
+    mv = MemoryVolume()
+    yield mv
+    mv.close()
+
+
+@pytest.fixture
 def fake_sanlock(monkeypatch, tmp_vol):
     sanlock = FakeSanlock(sector_size=tmp_vol.block_size)
+    monkeypatch.setattr(xlease, "sanlock", sanlock)
+    yield sanlock
+
+
+@pytest.fixture
+def memory_fake_sanlock(monkeypatch, memory_vol):
+    sanlock = FakeSanlock(sector_size=memory_vol.block_size)
     monkeypatch.setattr(xlease, "sanlock", sanlock)
     yield sanlock
 
@@ -373,6 +401,20 @@ class TestIndex:
                     vol.add(lease_id)
                 # Must succeed becuase writng to storage failed
                 assert lease_id not in vol.leases()
+
+    @pytest.mark.timeout(10)
+    def test_add_out_of_space(self, memory_vol, memory_fake_sanlock):
+        vol = xlease.LeasesVolume(
+            memory_vol.backend,
+            alignment=memory_vol.alignment,
+            block_size=memory_vol.block_size)
+        expected_leases = 3960
+        # Add max amount of leases that fit into index.
+        for lease in range(expected_leases):
+            vol.add(make_uuid())
+        # Index is now full so next add should raise.
+        with pytest.raises(xlease.NoSpace):
+            vol.add(make_uuid())
 
     def test_add_sanlock_failure(self, tmp_vol, fake_sanlock):
         vol = xlease.LeasesVolume(
