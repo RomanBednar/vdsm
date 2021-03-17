@@ -364,7 +364,6 @@ class TestIndex:
             with pytest.raises(se.NoSuchLease):
                 vol.lookup(make_uuid())
 
-    @pytest.mark.xfail(reason="bz1902127")
     def test_lookup_updating(self, tmp_vol):
         # This simulates updating record which should only happen when lease
         # is partially created with older vdsm versions.
@@ -382,7 +381,6 @@ class TestIndex:
             with pytest.raises(se.NoSuchLease):
                 vol.lookup(record.resource)
 
-    @pytest.mark.xfail(reason="bz1902127")
     def test_add(self, tmp_vol, fake_sanlock):
         vol = xlease.LeasesVolume(
             tmp_vol.backend,
@@ -398,7 +396,6 @@ class TestIndex:
                 sector=tmp_vol.block_size)
             verify_lease_added(lease, lease_id, res, vol)
 
-    @pytest.mark.xfail(reason="bz1902127")
     def test_add_write_failure(self, tmp_vol, fake_sanlock):
         backend = FailingWriter(tmp_vol.path)
         with utils.closing(backend):
@@ -427,7 +424,6 @@ class TestIndex:
         with pytest.raises(xlease.NoSpace):
             vol.add(make_uuid())
 
-    @pytest.mark.xfail(reason="bz1902127")
     def test_remove_sanlock_failure(self, tmp_vol, fake_sanlock):
         lease_id = make_uuid()
         vol = xlease.LeasesVolume(
@@ -446,7 +442,6 @@ class TestIndex:
             with pytest.raises(se.NoSuchLease):
                 vol.lookup(lease_id)
 
-    @pytest.mark.xfail(reason="bz1902127")
     def test_add_sanlock_failure(self, tmp_vol, fake_sanlock):
         lease_id = make_uuid()
         vol = xlease.LeasesVolume(
@@ -463,7 +458,6 @@ class TestIndex:
             with pytest.raises(se.NoSuchLease):
                 vol.lookup(lease_id)
 
-    @pytest.mark.xfail(reason="bz1902127")
     def test_updating_record_overwrites(self, tmp_vol, fake_sanlock):
         lease_id = make_uuid()
         target_recnum = 42
@@ -487,7 +481,6 @@ class TestIndex:
                 sector=tmp_vol.block_size)
             verify_lease_added(lease, lease_id, res, vol)
 
-    @pytest.mark.xfail(reason="bz1902127")
     def test_add_updating(self, tmp_vol, fake_sanlock):
         lease_id = make_uuid()
         # This simulates updating record which should only happen when lease
