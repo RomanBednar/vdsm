@@ -882,7 +882,7 @@ class FileStorageDomain(sd.StorageDomain):
             # Parse the meta file's key=value pairs and get the metadata dict.
             data = self.oop.readFile(filepath, direct=True)
             md_lines = data.rstrip(b"\0").splitlines()
-            md = VolumeMetadata.from_lines(md_lines).dump()
+            md = VolumeMetadata.from_lines(md_lines, allow_invalid=True).dump()
             # Set volume status when done.
             md["status"] = sc.VOL_STATUS_OK
         except Exception as e:

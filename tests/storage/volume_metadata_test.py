@@ -181,6 +181,18 @@ class TestVolumeMetadata:
         with pytest.raises(KeyError):
             md["INVALID_KEY"]
 
+    def test_from_lines_missing_param(self):
+        lines = make_lines()
+        lines.remove(b'DESCRIPTION=description')
+        lines.remove(b'TYPE=type')
+        with pytest.raises(se.MetaDataKeyNotFoundError):
+            volume.VolumeMetadata.from_lines(lines)
+        md = volume.VolumeMetadata.from_lines(lines, allow_invalid=True).dump()
+        # Description defaults to "None" when dumping.
+        assert md['description'] == "None"
+        # Other values like 'type' remain None.
+        assert md['type'] is None
+
     @pytest.mark.parametrize("key", [sc.CTIME, sc.CAPACITY])
     def test_from_lines_int_parse_error(self, key):
         lines = make_lines(**{key: 'not_an_integer'})
@@ -423,7 +435,8 @@ class TestDictInterface:
             'legality': params['legality'],
             'parent': params['puuid'],
             'type': params['type'],
-            'voltype': params['voltype']
+            'voltype': params['voltype'],
+            'status': sc.VOL_STATUS_OK
         }
 
         assert md.dump() == expected

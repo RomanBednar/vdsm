@@ -41,7 +41,7 @@ class VolumeMetadata(object):
 
     def __init__(self, domain, image, puuid, capacity, format, type, voltype,
                  disktype, description="", legality=sc.ILLEGAL_VOL, ctime=None,
-                 generation=sc.DEFAULT_GENERATION):
+                 generation=sc.DEFAULT_GENERATION, status=sc.VOL_STATUS_OK):
         # Storage domain UUID
         self.domain = domain
         # Image UUID
@@ -58,6 +58,8 @@ class VolumeMetadata(object):
         self.voltype = voltype
         # Intended usage of this volume (unused)
         self.disktype = disktype
+        # Status is set to sc.VOL_STATUS_INVALID if some metadata is missing
+        self.status = status
         # Free-form description and may be used to store extra metadata
         self.description = description
         # Indicates if the volume contents should be considered valid
@@ -68,7 +70,69 @@ class VolumeMetadata(object):
         self.generation = generation
 
     @classmethod
-    def from_lines(cls, lines):
+    def _parse_meta(cls, md, lines, allow_invalid=False):
+
+        kwargs = {}
+        REQUIRED_META = [
+            ("domain", sc.DOMAIN),
+            ("image", sc.IMAGE),
+            ("puuid", sc.PUUID),
+            ("capacity", sc.CAPACITY),
+            ("format", sc.FORMAT),
+            ("type", sc.TYPE),
+            ("voltype", sc.VOLTYPE),
+            ("disktype", sc.DISKTYPE),
+            ("description", sc.DESCRIPTION),
+            ("legality", sc.LEGALITY),
+            ("ctime", sc.CTIME),
+            ("generation", sc.GENERATION),
+        ]
+
+        # We work internally in bytes, even if old format store
+        # value in blocks, we will read SIZE instead of CAPACITY
+        # from non-converted volumes and use it
+        if sc.CAPACITY in md:
+            kwargs['capacity'] = int(md[sc.CAPACITY])
+        elif _SIZE in md:
+            kwargs['capacity'] = int(md[_SIZE]) * sc.BLOCK_SIZE_512
+
+        # generation was added to the set of metadata keys well
+        # after the above fields.  Therefore, it may not exist
+        # on storage for pre-existing volumes.  In that case we
+        # report a default value of 0 which will be written to
+        # the volume metadata on the next metadata change.
+        kwargs['generation'] = int(md.get(
+            sc.GENERATION, sc.DEFAULT_GENERATION))
+
+        if sc.CTIME in md:
+            kwargs['ctime'] = int(md[sc.CTIME])
+
+        for k, v in REQUIRED_META:
+            if kwargs.get(k) is None:
+                try:
+                    kwargs[k] = md[v]
+                except KeyError as e:
+                    cls.log.debug("Found missing key %s", e)
+                    if "NONE" in md:
+                        # Before 4.20.34-1 (ovirt 4.2.5) volume metadata could
+                        # be cleared by writing invalid metadata when deleting
+                        # a volume. See https://bugzilla.redhat.com/1574631.
+                        raise exception.MetadataCleared(
+                            "lines={}".format(lines))
+                    elif allow_invalid:
+                        cls.log.debug("Using invalid metadata is allowed. "
+                                      "Missing value: %s", e)
+                        kwargs[k] = None
+                    else:
+                        cls.log.debug("Using invalid metadata is not allowed. "
+                                      "Missing value: %s", e)
+                        raise exception.MetaDataKeyNotFoundError(
+                            "key={} lines={}".format(e, lines))
+
+        return kwargs
+
+    @classmethod
+    def from_lines(cls, lines, allow_invalid=False):
         '''
         Instantiates a VolumeMetadata object from storage read bytes.
 
@@ -86,42 +150,14 @@ class VolumeMetadata(object):
             key, value = line.split('=', 1)
             md[key.strip()] = value.strip()
 
-        try:
-            # We work internally in bytes, even if old format store
-            # value in blocks, we will read SIZE instead of CAPACITY
-            # from non-converted volumes and use it
-            if sc.CAPACITY in md:
-                capacity = int(md[sc.CAPACITY])
-            else:
-                capacity = int(md[_SIZE]) * sc.BLOCK_SIZE_512
+        kw = cls._parse_meta(md, lines, allow_invalid=allow_invalid)
 
-            return cls(domain=md[sc.DOMAIN],
-                       image=md[sc.IMAGE],
-                       puuid=md[sc.PUUID],
-                       capacity=capacity,
-                       format=md[sc.FORMAT],
-                       type=md[sc.TYPE],
-                       voltype=md[sc.VOLTYPE],
-                       disktype=md[sc.DISKTYPE],
-                       description=md[sc.DESCRIPTION],
-                       legality=md[sc.LEGALITY],
-                       ctime=int(md[sc.CTIME]),
-                       # generation was added to the set of metadata keys well
-                       # after the above fields.  Therefore, it may not exist
-                       # on storage for pre-existing volumes.  In that case we
-                       # report a default value of 0 which will be written to
-                       # the volume metadata on the next metadata change.
-                       generation=int(md.get(sc.GENERATION,
-                                             sc.DEFAULT_GENERATION)))
-        except KeyError as e:
-            if "NONE" in md:
-                # Before 4.20.34-1 (ovirt 4.2.5) volume metadata could be
-                # cleared by writing invalid metadata when deleting a volume.
-                # See https://bugzilla.redhat.com/1574631.
-                raise exception.MetadataCleared("lines={}".format(lines))
-
-            raise exception.MetaDataKeyNotFoundError(
-                "key={} lines={}".format(e, lines))
+        # Check if any of the values is missing and set status.
+        if any(v is None for v in kw.values()):
+            kw['status'] = sc.VOL_STATUS_INVALID
+        else:
+            kw['status'] = sc.VOL_STATUS_OK
+        return cls(**kw)
 
     @property
     def description(self):
@@ -280,5 +316,6 @@ class VolumeMetadata(object):
             "legality": self.legality,
             "parent": self.puuid,
             "type": self.type,
-            "voltype": self.voltype
+            "voltype": self.voltype,
+            "status" : self.status,
         }

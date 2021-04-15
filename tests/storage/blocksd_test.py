@@ -1189,6 +1189,25 @@ def test_dump_sd_metadata(
         "volumes": expected_volumes_metadata
     }
 
+    # Missing key should not prevent dumping domain info.
+    slot = vol.getMetaSlot()
+    backup = bytes(dom.manifest.read_metadata_block(slot))
+    data = backup[:]
+    data = data.replace(b"DESCRIPTION", b"xCORRUPTEDx")
+
+    # Write corrupted data to metadata block.
+    dom.manifest.write_metadata_block(slot, data)
+    corrupt_metadata = dom.dump()
+    missing_desc = corrupt_metadata['volumes'][vol_uuid]['description']
+    assert missing_desc == 'None'
+
+    # Restore and check missing key is back.
+    dom.manifest.write_metadata_block(slot, backup)
+    metadata = dom.dump()
+    orig_desc = metadata['volumes'][vol_uuid]['description']
+    expected_desc = expected_volumes_metadata[vol_uuid]['description']
+    assert orig_desc == expected_desc
+
     # Uninitialized volume is excluded from dump.
     with change_vol_tag(vol, "", sc.TAG_VOL_UNINIT):
         assert dom.dump() == {
