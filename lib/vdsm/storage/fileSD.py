@@ -882,9 +882,7 @@ class FileStorageDomain(sd.StorageDomain):
             # Parse the meta file's key=value pairs and get the metadata dict.
             data = self.oop.readFile(filepath, direct=True)
             md_lines = data.rstrip(b"\0").splitlines()
-            md = VolumeMetadata.from_lines(md_lines).dump()
-            # Set volume status when done.
-            md["status"] = sc.VOL_STATUS_OK
+            md = VolumeMetadata.parse(md_lines)
         except Exception as e:
             self.log.warning("Failed to parse meta file for volume %s/%s: %s",
                              self.sdUUID, vol_uuid, e)

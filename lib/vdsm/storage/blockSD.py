@@ -1804,13 +1804,21 @@ class BlockStorageDomain(sd.StorageDomain):
 
             try:
                 md_lines = slot_raw_md.rstrip(b"\0").splitlines()
-                slot_md = VolumeMetadata.from_lines(md_lines).dump()
-                slot_md["status"] = sc.VOL_STATUS_OK
+                slot_md, errors = VolumeMetadata.parse(md_lines)
             except Exception as e:
                 self.log.warning(
                     "Failed to parse metadata slot %s offset=%s: %s",
                     slot, offset, e)
                 slot_md = {"status": sc.VOL_STATUS_INVALID}
+            if errors:
+                self.log.warning("Some metadata did not parse correctly"
+                                 "  errors=%s", errors)
+
+            # Do not include domain in dump output.
+            try:
+                del(slot_md['domain'])
+            except KeyError:
+                pass
 
             slot_md["mdslot"] = slot
             slots_md[slot] = slot_md
