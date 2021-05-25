@@ -1812,6 +1812,11 @@ class MetadataCleared(MetaDataKeyNotFoundError):
     msg = "Metadata was cleared, volume is partly deleted"
 
 
+class InvalidMetadata(MetaDataGeneralError):
+    code = 757
+    msg = "Metadata missing or invalid"
+
+
 #################################################
 #  Import/Export Exceptions
 #################################################

@@ -172,7 +172,7 @@ class TestVolumeMetadata:
         data = make_md_dict()
         data[required_key] = None
         lines = make_lines(**data)
-        with pytest.raises(se.MetaDataKeyNotFoundError):
+        with pytest.raises(se.InvalidMetadata):
             volume.VolumeMetadata.from_lines(lines)
 
     def test_from_lines_invalid_param(self):
@@ -184,7 +184,7 @@ class TestVolumeMetadata:
     @pytest.mark.parametrize("key", [sc.CTIME, sc.CAPACITY])
     def test_from_lines_int_parse_error(self, key):
         lines = make_lines(**{key: 'not_an_integer'})
-        with pytest.raises(ValueError):
+        with pytest.raises(se.InvalidMetadata):
             volume.VolumeMetadata.from_lines(lines)
 
     @pytest.mark.parametrize("version", [4, 5])
@@ -231,7 +231,7 @@ class TestVolumeMetadata:
         lines = md.storage_format(5).splitlines()
         lines.remove(b"CAP=1073741824")
 
-        with pytest.raises(se.MetaDataKeyNotFoundError):
+        with pytest.raises(se.InvalidMetadata):
             volume.VolumeMetadata.from_lines(lines)
 
     def test_generation_default(self):
@@ -245,8 +245,25 @@ class TestVolumeMetadata:
             volume.VolumeMetadata.from_lines(lines)
 
     def test_empty_metadata(self):
-        with pytest.raises(se.MetaDataKeyNotFoundError):
+        with pytest.raises(se.InvalidMetadata):
             volume.VolumeMetadata.from_lines([])
+
+    def test_parse_storage_invalid(self):
+        lines = make_lines(CAP="INVALID")
+        md, _ = volume.VolumeMetadata.parse(lines)
+        assert md['status'] == sc.VOL_STATUS_INVALID
+        assert 'capacity' not in md
+
+    def test_parse_storage_missing(self):
+        lines = make_lines()
+        lines.remove(b"VOLTYPE=voltype")
+        md, _ = volume.VolumeMetadata.parse(lines)
+        assert 'voltype' not in md
+
+    def test_parse_storage_errors(self):
+        lines = (b"")
+        _, errors = volume.VolumeMetadata.parse(lines)
+        assert errors
 
 
 class TestMDSize:

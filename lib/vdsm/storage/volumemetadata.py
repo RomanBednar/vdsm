@@ -34,6 +34,21 @@ from vdsm.storage import exception
 # used only by metadata code, move it here and make it private.
 _SIZE = "SIZE"
 
+ATTRIBUTES = {
+    sc.DOMAIN: ("domain", str),
+    sc.IMAGE: ("image", str),
+    sc.PUUID: ("parent", str),
+    sc.CAPACITY: ("capacity", int),
+    sc.FORMAT: ("format", str),
+    sc.TYPE: ("type", str),
+    sc.VOLTYPE: ("voltype", str),
+    sc.DISKTYPE: ("disktype", str),
+    sc.DESCRIPTION: ("description", str),
+    sc.LEGALITY: ("legality", str),
+    sc.CTIME: ("ctime", int),
+    sc.GENERATION: ("generation", int)
+}
+
 
 class VolumeMetadata(object):
 
@@ -41,7 +56,7 @@ class VolumeMetadata(object):
 
     def __init__(self, domain, image, parent, capacity, format, type, voltype,
                  disktype, description="", legality=sc.ILLEGAL_VOL, ctime=None,
-                 generation=sc.DEFAULT_GENERATION):
+                 generation=sc.DEFAULT_GENERATION, status=sc.VOL_STATUS_OK):
         # Storage domain UUID
         self.domain = domain
         # Image UUID
@@ -66,6 +81,70 @@ class VolumeMetadata(object):
         self.ctime = int(time.time()) if ctime is None else ctime
         # Generation increments each time certain operations complete
         self.generation = generation
+        # Status is ok if all metadata is present and validated
+        self.status = status
+
+    @classmethod
+    def _lines_to_dict(cls, lines):
+        md = {}
+        for line in lines:
+            line = line.decode("utf-8")
+            if line.startswith("EOF"):
+                break
+            if '=' not in line:
+                continue
+            key, value = line.split('=', 1)
+            md[key.strip()] = value.strip()
+        return md
+
+    @classmethod
+    def _normalize_capacity(cls, md):
+        # We work internally in bytes, even if old format store
+        # value in blocks, we will read SIZE instead of CAPACITY
+        # from non-converted volumes and use it
+        if _SIZE in md and sc.CAPACITY not in md:
+            try:
+                md[sc.CAPACITY] = int(md[_SIZE]) * sc.BLOCK_SIZE_512
+            except ValueError:
+                cls.log.warning("Failed to read legacy metadata key=%s"
+                                "metadata=%s", _SIZE, md)
+                del(md[_SIZE])
+        return md
+
+    @classmethod
+    def _normalize_generation(cls, md):
+        try:
+            generation = md[sc.GENERATION]
+        except KeyError:
+            md[sc.GENERATION] = sc.DEFAULT_GENERATION
+            return md
+        if generation is None:
+            md[sc.GENERATION] = sc.DEFAULT_GENERATION
+        return md
+
+    @classmethod
+    def parse(cls, lines):
+        md = cls._lines_to_dict(lines)
+
+        if "NONE" in md:
+            # Before 4.20.34-1 (ovirt 4.2.5) volume metadata could be
+            # cleared by writing invalid metadata when deleting a volume.
+            # See https://bugzilla.redhat.com/1574631.
+            raise exception.MetadataCleared("metadata={}".format(md))
+
+        md = cls._normalize_capacity(md)
+        md = cls._normalize_generation(md)
+        metadata = {'status' : sc.VOL_STATUS_OK}
+        errors = []
+        for key, (name, validate) in ATTRIBUTES.items():
+            try:
+                metadata[name] = validate(md[key])
+            except (KeyError, ValueError) as e:
+                metadata['status'] = sc.VOL_STATUS_INVALID
+                errors.append(e)
+                cls.log.warning("Failed to parse metadata key=%s metadata=%s"
+                                " error=%s", key, metadata, e)
+        return metadata, errors
 
     @classmethod
     def from_lines(cls, lines):
@@ -76,52 +155,12 @@ class VolumeMetadata(object):
             lines: list of key=value entries given as bytes read from storage
             metadata section. "EOF" entry terminates parsing.
         '''
-        md = {}
-        for line in lines:
-            line = line.decode("utf-8")
-            if line.startswith("EOF"):
-                break
-            if '=' not in line:
-                continue
-            key, value = line.split('=', 1)
-            md[key.strip()] = value.strip()
 
-        try:
-            # We work internally in bytes, even if old format store
-            # value in blocks, we will read SIZE instead of CAPACITY
-            # from non-converted volumes and use it
-            if sc.CAPACITY in md:
-                capacity = int(md[sc.CAPACITY])
-            else:
-                capacity = int(md[_SIZE]) * sc.BLOCK_SIZE_512
-
-            return cls(domain=md[sc.DOMAIN],
-                       image=md[sc.IMAGE],
-                       puuid=md[sc.PUUID],
-                       capacity=capacity,
-                       format=md[sc.FORMAT],
-                       type=md[sc.TYPE],
-                       voltype=md[sc.VOLTYPE],
-                       disktype=md[sc.DISKTYPE],
-                       description=md[sc.DESCRIPTION],
-                       legality=md[sc.LEGALITY],
-                       ctime=int(md[sc.CTIME]),
-                       # generation was added to the set of metadata keys well
-                       # after the above fields.  Therefore, it may not exist
-                       # on storage for pre-existing volumes.  In that case we
-                       # report a default value of 0 which will be written to
-                       # the volume metadata on the next metadata change.
-                       generation=int(md.get(sc.GENERATION,
-                                             sc.DEFAULT_GENERATION)))
-        except KeyError as e:
-            if "NONE" in md:
-                # Before 4.20.34-1 (ovirt 4.2.5) volume metadata could be
-                # cleared by writing invalid metadata when deleting a volume.
-                # See https://bugzilla.redhat.com/1574631.
-                raise exception.MetadataCleared("lines={}".format(lines))
-
-            raise exception.MetaDataKeyNotFoundError(
-                "key={} lines={}".format(e, lines))
+        metadata, errors = cls.parse(lines)
+        if errors:
+            raise exception.InvalidMetadata(
+                "lines={} errors={}".format(lines, errors))
+        return cls(**metadata)
 
     @property
     def description(self):
