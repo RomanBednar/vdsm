@@ -32,7 +32,7 @@ from testlib import make_uuid
 from vdsm.common.units import MiB, GiB, PiB
 from vdsm.storage import constants as sc
 from vdsm.storage import exception as se
-from vdsm.storage import volume
+from vdsm.storage import volume, volumemetadata
 
 from . constants import CLEARED_VOLUME_METADATA
 
@@ -172,7 +172,7 @@ class TestVolumeMetadata:
         data = make_md_dict()
         data[required_key] = None
         lines = make_lines(**data)
-        with pytest.raises(se.MetaDataKeyNotFoundError):
+        with pytest.raises(se.InvalidMetadata):
             volume.VolumeMetadata.from_lines(lines)
 
     def test_from_lines_invalid_param(self):
@@ -184,7 +184,7 @@ class TestVolumeMetadata:
     @pytest.mark.parametrize("key", [sc.CTIME, sc.CAPACITY])
     def test_from_lines_int_parse_error(self, key):
         lines = make_lines(**{key: 'not_an_integer'})
-        with pytest.raises(ValueError):
+        with pytest.raises(se.InvalidMetadata):
             volume.VolumeMetadata.from_lines(lines)
 
     @pytest.mark.parametrize("version", [4, 5])
@@ -231,7 +231,7 @@ class TestVolumeMetadata:
         lines = md.storage_format(5).splitlines()
         lines.remove(b"CAP=1073741824")
 
-        with pytest.raises(se.MetaDataKeyNotFoundError):
+        with pytest.raises(se.InvalidMetadata):
             volume.VolumeMetadata.from_lines(lines)
 
     def test_generation_default(self):
@@ -241,12 +241,67 @@ class TestVolumeMetadata:
 
     def test_cleared_metadata(self):
         lines = CLEARED_VOLUME_METADATA.rstrip(b"\0").splitlines()
-        with pytest.raises(se.MetadataCleared):
+        with pytest.raises(se.InvalidMetadata):
             volume.VolumeMetadata.from_lines(lines)
 
     def test_empty_metadata(self):
-        with pytest.raises(se.MetaDataKeyNotFoundError):
+        with pytest.raises(se.InvalidMetadata):
             volume.VolumeMetadata.from_lines([])
+
+    @pytest.mark.parametrize("key", [sc.CTIME, sc.CAPACITY, sc.GENERATION])
+    def test_parse_invalid_values(self, key):
+        lines = make_lines(**{key: 'not_an_integer'})
+        md, errors = volumemetadata.parse(lines)
+
+        # Check other keys are reported using the right type.
+        for attr, validator in volumemetadata.ATTRIBUTES.values():
+            if attr in md:
+                validator(md[attr])
+
+        # Errors should contain invalid values.
+        assert any(['not_an_integer' in x for x in errors])
+
+        # The key with invalid value should not be present in metadata.
+        missing_attr, _ = volumemetadata.ATTRIBUTES[key]
+        assert missing_attr not in md
+
+    def test_invalid_legacy_size_value(self):
+        capacity = 123456
+        lines = make_lines(**{volumemetadata._SIZE: 'not_an_integer',
+                              "CAP": capacity})
+
+        # Check capacity is used regardless of invalid size legacy value.
+        md, errors = volumemetadata.parse(lines)
+        assert not errors
+        assert md['capacity'] == capacity
+
+    def test_valid_legacy_size_no_capacity(self):
+        size = 4
+        capacity = size * sc.BLOCK_SIZE_512
+        lines = make_lines(**{volumemetadata._SIZE: size,
+                              "CAP": capacity})
+
+        # Remove capacity value.
+        lines.remove(b'CAP=%s' % str(capacity).encode("utf-8"))
+
+        # Parse lines and check capacity was calculated from size.
+        md, errors = volumemetadata.parse(lines)
+        assert not errors
+        assert md['capacity'] == capacity
+
+    def test_parse_missing_key(self):
+        lines = make_lines()
+
+        # Remove some value to simulate missing storage data.
+        lines.remove(b"VOLTYPE=voltype")
+
+        # Parse metadata ignoring errors
+        md, errors = volumemetadata.parse(lines)
+
+        # Invalid value should be shown in errors.
+        assert any(['VOLTYPE' in x for x in errors])
+
+        assert 'voltype' not in md
 
 
 class TestMDSize:
