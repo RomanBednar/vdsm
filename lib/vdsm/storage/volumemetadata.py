@@ -98,6 +98,20 @@ def parse(lines):
 
     return metadata, errors
 
+def dump(lines):
+    md, errors = parse(lines)
+    if errors:
+        logging.warning(
+            "Invalid metadata found errors=%s", errors)
+        md["status"] = sc.VOL_STATUS_INVALID
+    else:
+        md["status"] = sc.VOL_STATUS_OK
+
+    # Do not include domain in dump output.
+    md.pop("domain", None)
+
+    return md
+
 
 class VolumeMetadata(object):
 
