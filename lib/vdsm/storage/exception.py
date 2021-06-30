@@ -1282,6 +1282,26 @@ class ImageVerificationError(StorageException):
 #  LVM related Exceptions
 #################################################
 
+class LVMCommandError(StorageException):
+    code = 621
+    msg = "LVM command failed"
+
+    def __init__(self, command, rc, out, err):
+        self.command = command
+        self.rc = rc
+        self.out = out
+        self.err = err
+
+    @property
+    def value(self):
+        return "command={} rc={} out={} err={}".format(
+            self.command, self.rc, self.out, self.err)
+
+    def lv_in_use(self):
+        in_use = r"^Logical volume \S* in use.$"
+        return any([re.search(in_use, x.strip()) for x in self.err])
+
+
 class VolumeGroupActionError(StorageException):
     code = 500
     msg = "Error volume group action"
@@ -1292,9 +1312,7 @@ class VolumeGroupPermissionsError(StorageException):
     msg = "Could not update/change volume group permissions"
 
 
-class VolumeGroupCreateError(StorageException):
-    def __init__(self, vgname, devname):
-        self.value = "vgname=%s, devname=%s" % (vgname, devname)
+class VolumeGroupCreateError(LVMCommandError):
     code = 502
     msg = "Cannot create Volume Group"
 
@@ -1524,7 +1542,7 @@ class BlockDeviceActionError(StorageException):
     msg = "Error block device action"
 
 
-class PhysDevInitializationError(StorageException):
+class PhysDevInitializationError(LVMCommandError):
     code = 601
     msg = "Failed to initialize physical device"
 
@@ -1657,26 +1675,6 @@ class NoSuchDestinationPhysicalVolumes(StorageException):
 
     def __init__(self, pvs, vgname):
         self.value = "pvs=%s vgname=%s" % (pvs, vgname)
-
-
-class LVMCommandError(StorageException):
-    code = 621
-    msg = "LVM command failed"
-
-    def __init__(self, command, rc, out, err):
-        self.command = command
-        self.rc = rc
-        self.out = out
-        self.err = err
-
-    @property
-    def value(self):
-        return "command={} rc={} out={} err={}".format(
-            self.command, self.rc, self.out, self.err)
-
-    def lv_in_use(self):
-        in_use = r"^Logical volume \S* in use.$"
-        return any([re.search(in_use, x.strip()) for x in self.err])
 
 
 #################################################

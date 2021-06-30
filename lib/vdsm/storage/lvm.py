@@ -1132,8 +1132,14 @@ def _createpv(devices, metadataSize, options=tuple()):
                     "--metadatacopies", "2",
                     "--metadataignore", "y"))
     cmd.extend(devices)
-    rc, out, err = _lvminfo.cmd(cmd, devices)
-    return rc, out, err
+    _lvminfo.cmd(cmd, devices)
+
+
+def _enable_metadata_area(pvs):
+    # Activate the 1st PV metadata areas
+    cmd = ["pvchange", "--metadataignore", "n"]
+    cmd.append(pvs[0])
+    _lvminfo.run_command(cmd, tuple(pvs))
 
 
 def _initpvs(devices, metadataSize, force=False):
@@ -1157,12 +1163,8 @@ def _initpvs(devices, metadataSize, force=False):
     else:
         options = tuple()
 
-    rc, out, err = _createpv(devices, metadataSize, options)
+    _createpv(devices, metadataSize, options)
     _lvminfo._invalidatepvs(devices)
-    if rc != 0:
-        log.error("pvcreate failed with rc=%s", rc)
-        log.error("%s, %s", out, err)
-        raise se.PhysDevInitializationError(str(devices))
 
 
 def getLvDmName(vgName, lvName):
@@ -1415,27 +1417,26 @@ def set_read_only(read_only):
 
 def createVG(vgName, devices, initialTag, metadataSize, force=False):
     pvs = [_fqpvname(pdev) for pdev in normalize_args(devices)]
-    _checkpvsblksize(pvs)
 
-    _initpvs(pvs, metadataSize, force)
-    # Activate the 1st PV metadata areas
-    cmd = ["pvchange", "--metadataignore", "n"]
-    cmd.append(pvs[0])
-    rc, out, err = _lvminfo.cmd(cmd, tuple(pvs))
-    if rc != 0:
-        raise se.PhysDevInitializationError(pvs[0])
+    try:
+        _checkpvsblksize(pvs)
+        _initpvs(pvs, metadataSize, force)
+        _enable_metadata_area(pvs)
+    except se.LVMCommandError as e:
+        raise se.PhysDevInitializationError(e.rc, e.cmd, e.out, e.err)
 
     options = ["--physicalextentsize", "%dm" % (sc.VG_EXTENT_SIZE // MiB)]
     if initialTag:
         options.extend(("--addtag", initialTag))
     cmd = ["vgcreate"] + options + [vgName] + pvs
-    rc, out, err = _lvminfo.cmd(cmd, tuple(pvs))
-    if rc == 0:
+
+    try:
+        _lvminfo.run_command(cmd, tuple(pvs))
         _lvminfo._invalidatepvs(pvs)
         _lvminfo._invalidatevgs(vgName)
         log.debug("Cache after createvg %s", _lvminfo._vgs)
-    else:
-        raise se.VolumeGroupCreateError(vgName, pvs)
+    except se.LVMCommandError as e:
+        raise se.VolumeGroupCreateError(e.rc, e.cmd, e.out, e.err)
 
 
 def removeVG(vgName):
